@@ -1,6 +1,6 @@
 <?php
 /**
- * Plugin Name: Antibody VideoObject Schema (MU)
+ * Plugin Name: Alphabeta VideoObject Schema (MU)
  * Description: Outputs Schema.org VideoObject JSON-LD on watch pages. Works with ACF (if present) or a built-in meta box. Minimal, theme-agnostic.
  * Author: Bridget Walsh Clair
  * Version: 1.0.5
