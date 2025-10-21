@@ -722,97 +722,161 @@ class VOBJ_MU_Plugin {
     }
   }
 
-  public function render_meta_box($post) {
-    wp_nonce_field(self::NONCE, self::NONCE);
+public function render_meta_box($post) {
+  wp_nonce_field(self::NONCE, self::NONCE);
 
-    // Prefill from meta, mapping or sensible defaults
-    $prefill = function ($key, $default = '') use ($post) {
-      $meta = get_post_meta($post->ID, self::META_PREFIX.$key, true);
-      if ($meta !== '') return esc_attr($meta);
-      if (method_exists($this, 'get_mapped_acf')) {
-        try {
-          $mapped = $this->get_mapped_acf($post->ID, $key);
-        } catch (Throwable $e) {
-          $mapped = null;
-        }
-        if ($mapped !== null && $mapped !== 'featured_image') {
-          if (is_array($mapped)) return esc_attr('');
+  // Prefill from meta, mapping or sensible defaults
+  $prefill = function ($key, $default = '') use ($post) {
+    // 1) prefer explicit post meta saved by this meta box
+    $meta = get_post_meta($post->ID, self::META_PREFIX.$key, true);
+    if ($meta !== '') return esc_attr($meta);
+
+    // 2) try mapping (ACF)
+    if (method_exists($this, 'get_mapped_acf')) {
+      try {
+        $mapped = $this->get_mapped_acf($post->ID, $key);
+      } catch (Throwable $e) {
+        $mapped = null;
+      }
+      // For non-thumbnail fields: if mapping returns scalar, show it
+      if ($mapped !== null && $mapped !== 'featured_image') {
+        if (!is_array($mapped)) {
           return esc_attr((string)$mapped);
         }
+        // For arrays we avoid dumping into text fields (except thumbnail, handled below)
+        return esc_attr($default);
       }
-      if ($key === 'title') return esc_attr(get_the_title($post->ID) ?: $default);
-      if ($key === 'description') return esc_attr(wp_strip_all_tags(get_the_excerpt($post->ID)) ?: $default);
-      return esc_attr($default);
-    };
+    }
 
-    $meta_text = function($key, $default='') use ($post) {
-      $v = get_post_meta($post->ID, self::META_PREFIX.$key, true);
-      if ($v !== '') return esc_textarea($v);
-      if (method_exists($this, 'get_mapped_acf')) {
-        $m = $this->get_mapped_acf($post->ID, $key);
-        if (is_string($m) && $m !== '') return esc_textarea($m);
-      }
-      return esc_textarea($default);
-    };
-    ?>
-    <p><label><input type="checkbox" name="vobj_enabled" value="1" <?php checked(get_post_meta($post->ID, self::META_PREFIX.'enabled', true), '1'); ?>> <?php _e('Enable VideoObject on this page', 'vobj'); ?></label></p>
+    // 3) sensible defaults
+    if ($key === 'title') return esc_attr(get_the_title($post->ID) ?: $default);
+    if ($key === 'description') return esc_attr(wp_strip_all_tags(get_the_excerpt($post->ID)) ?: $default);
+    return esc_attr($default);
+  };
 
-    <table class="form-table">
-      <tr><th><label><?php _e('Title', 'vobj'); ?></label></th><td><input type="text" class="widefat" name="vobj_title" value="<?php echo $prefill('title', get_the_title($post->ID)); ?>"></td></tr>
-      <tr><th><label><?php _e('Description', 'vobj'); ?></label></th><td><textarea class="widefat" name="vobj_description" rows="3"><?php echo $meta_text('description', wp_strip_all_tags(get_the_excerpt($post->ID))); ?></textarea></td></tr>
-      <tr><th><label><?php _e('Upload Date (ISO 8601)', 'vobj'); ?></label></th><td><input type="text" class="widefat" placeholder="2025-10-21T09:00:00+11:00" name="vobj_upload_date" value="<?php echo $prefill('upload_date', get_post_time('c', true, $post->ID)); ?>"></td></tr>
-      <tr><th><label><?php _e('Duration (ISO 8601)', 'vobj'); ?></label></th><td><input type="text" class="widefat" placeholder="PT2M31S" name="vobj_duration_iso" value="<?php echo $prefill('duration_iso', ''); ?>"></td></tr>
-      <tr><th><label><?php _e('Thumbnail (URL or featured_image token)', 'vobj'); ?></label></th><td><input type="text" class="widefat" name="vobj_thumbnail_url" value="<?php echo $prefill('thumbnail_url', ''); ?>"></td></tr>
-      <tr><th><label><?php _e('Content URL (mp4/HLS) or leave for ACF file mapping', 'vobj'); ?></label></th><td><input type="url" class="widefat" name="vobj_content_url" value="<?php echo $prefill('content_url', ''); ?>"></td></tr>
-      <tr><th><label><?php _e('Embed URL (YouTube/Vimeo)', 'vobj'); ?></label></th><td><input type="url" class="widefat" name="vobj_embed_url" value="<?php echo $prefill('embed_url', ''); ?>"></td></tr>
-      <tr><th><label><?php _e('Transcript (URL or text)', 'vobj'); ?></label></th><td><textarea class="widefat" name="vobj_transcript_url" rows="2"><?php echo $meta_text('transcript_url', ''); ?></textarea></td></tr>
-      <tr><th><label><?php _e('Language', 'vobj'); ?></label></th><td><input type="text" class="regular-text" placeholder="en or en-AU" name="vobj_language" value="<?php echo $prefill('language','en'); ?>"></td></tr>
-      <tr><th><label><?php _e('SeekToAction (auto key moments)', 'vobj'); ?></label></th><td><label><input type="checkbox" name="vobj_seektoaction" value="1" <?php checked(get_post_meta($post->ID, self::META_PREFIX.'seektoaction', true), '1'); ?>> <?php _e('Enable', 'vobj'); ?></label></td></tr>
-      <tr>
-        <th><label><?php _e('Clips (JSON)', 'vobj'); ?></label></th>
-        <td>
-          <textarea class="widefat" name="vobj_clips_json" rows="5" placeholder='[{"name":"Intro","startOffset":0,"endOffset":29,"url":""}]'><?php echo esc_textarea(get_post_meta($post->ID, self::META_PREFIX.'clips_json', true)); ?></textarea>
-          <p class="description"><?php _e('Optional chapter markers. Each item: <code>name</code>, <code>startOffset</code> (sec), optional <code>endOffset</code>, optional <code>url</code>.', 'vobj'); ?></p>
-        </td>
-      </tr>
+  // Helper for multi-line fields (textarea)
+  $meta_text = function($key, $default='') use ($post) {
+    $v = get_post_meta($post->ID, self::META_PREFIX.$key, true);
+    if ($v !== '') return esc_textarea($v);
+    if (method_exists($this, 'get_mapped_acf')) {
+      $m = $this->get_mapped_acf($post->ID, $key);
+      if (is_string($m) && $m !== '') return esc_textarea($m);
+    }
+    return esc_textarea($default);
+  };
 
-      <!-- New: Visual description -->
-      <tr>
-        <th><label><?php _e('Visual description', 'vobj'); ?></label></th>
-        <td>
-          <textarea class="widefat" name="vobj_visual_description" rows="4" placeholder="<?php echo esc_attr('Describe visually what happens in this piece (no transcript required).'); ?>"><?php echo esc_textarea(get_post_meta($post->ID, self::META_PREFIX.'visual_description', true)); ?></textarea>
-          <p class="description"><?php _e('Optional: a short/long visual description for work where transcripts are not available. This will be emitted as a PropertyValue "visualDescription" in the schema.', 'vobj'); ?></p>
-        </td>
-      </tr>
-
-    </table>
-
-    <?php
-    // Show Preview (computed payload) for editors
-    if (current_user_can('edit_post', $post->ID)) {
-      echo '<hr>';
-      echo '<details><summary><strong>' . esc_html__('Preview generated JSON-LD', 'vobj') . '</strong></summary><div style="margin-top:8px;">';
+  // Determine a display value for thumbnail specifically (resolve featured_image or ID/array)
+  $thumbnail_display = '';
+  // If explicit post meta exists show that
+  $meta_thumb = get_post_meta($post->ID, self::META_PREFIX.'thumbnail_url', true);
+  if ($meta_thumb !== '') {
+    $thumbnail_display = esc_attr($meta_thumb);
+  } else {
+    // try mapping resolution
+    if (method_exists($this, 'get_mapped_acf')) {
       try {
-        $payload = $this->collect_video_data($post->ID);
-        if ($payload && is_array($payload)) {
-          $pretty = wp_json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-          echo '<pre style="white-space:pre-wrap; background:#f6f8fa; padding:10px; border:1px solid #ddd;">' . esc_html($pretty) . '</pre>';
-          $missing = [];
-          if (empty($payload['name'])) $missing[] = 'name';
-          if (empty($payload['thumbnailUrl'])) $missing[] = 'thumbnailUrl';
-          if (empty($payload['uploadDate'])) $missing[] = 'uploadDate';
-          if ($missing) {
-            echo '<p style="color:#b94a48;"><strong>' . esc_html__('Missing required fields: ', 'vobj') . esc_html(implode(', ', $missing)) . '</strong></p>';
-          }
-        } else {
-          echo '<p class="description">' . esc_html__('No schema payload generated for this post. Ensure the post is enabled or ACF mappings / meta values exist.', 'vobj') . '</p>';
-        }
+        $mapped_thumb = $this->get_mapped_acf($post->ID, 'thumbnail_url');
       } catch (Throwable $e) {
-        echo '<p class="description">' . esc_html__('Preview failed: ') . esc_html($e->getMessage()) . '</p>';
+        $mapped_thumb = null;
       }
-      echo '</div></details>';
+      // special token
+      if ($mapped_thumb === 'featured_image') {
+        $feat_id = get_post_thumbnail_id($post->ID);
+        if ($feat_id) {
+          $url = wp_get_attachment_url($feat_id);
+          if ($url) $thumbnail_display = esc_attr($url);
+        }
+      } elseif (is_numeric($mapped_thumb)) {
+        $url = wp_get_attachment_url((int)$mapped_thumb);
+        if ($url) $thumbnail_display = esc_attr($url);
+      } elseif (is_array($mapped_thumb)) {
+        // common ACF image array -> try url or sizes
+        if (!empty($mapped_thumb['url']) && filter_var($mapped_thumb['url'], FILTER_VALIDATE_URL)) {
+          $thumbnail_display = esc_attr($mapped_thumb['url']);
+        } elseif (!empty($mapped_thumb['sizes']) && is_array($mapped_thumb['sizes'])) {
+          if (!empty($mapped_thumb['sizes']['full'])) $thumbnail_display = esc_attr($mapped_thumb['sizes']['full']);
+          else {
+            $sizes = array_values($mapped_thumb['sizes']);
+            if (!empty($sizes[0]) && filter_var($sizes[0], FILTER_VALIDATE_URL)) $thumbnail_display = esc_attr($sizes[0]);
+          }
+        }
+      } elseif (is_string($mapped_thumb) && filter_var($mapped_thumb, FILTER_VALIDATE_URL)) {
+        $thumbnail_display = esc_attr($mapped_thumb);
+      }
     }
   }
+
+  ?>
+  <p><label><input type="checkbox" name="vobj_enabled" value="1" <?php checked(get_post_meta($post->ID, self::META_PREFIX.'enabled', true), '1'); ?>> <?php _e('Enable VideoObject on this page', 'vobj'); ?></label></p>
+
+  <table class="form-table">
+    <tr><th><label><?php _e('Title', 'vobj'); ?></label></th><td><input type="text" class="widefat" name="vobj_title" value="<?php echo $prefill('title', get_the_title($post->ID)); ?>"></td></tr>
+    <tr><th><label><?php _e('Description', 'vobj'); ?></label></th><td><textarea class="widefat" name="vobj_description" rows="3"><?php echo $meta_text('description', wp_strip_all_tags(get_the_excerpt($post->ID))); ?></textarea></td></tr>
+    <tr><th><label><?php _e('Upload Date (ISO 8601)', 'vobj'); ?></label></th><td><input type="text" class="widefat" placeholder="2025-10-21T09:00:00+11:00" name="vobj_upload_date" value="<?php echo $prefill('upload_date', get_post_time('c', true, $post->ID)); ?>"></td></tr>
+    <tr><th><label><?php _e('Duration (ISO 8601)', 'vobj'); ?></label></th><td><input type="text" class="widefat" placeholder="PT2M31S" name="vobj_duration_iso" value="<?php echo $prefill('duration_iso', ''); ?>"></td></tr>
+
+    <tr>
+      <th><label><?php _e('Thumbnail (URL or featured_image token)', 'vobj'); ?></label></th>
+      <td>
+        <input type="text" class="widefat" name="vobj_thumbnail_url" value="<?php echo $thumbnail_display; ?>">
+        <p class="description"><?php _e('Enter a URL or use the Schema Settings mapping (featured_image or an ACF image field). If mapping is used, the resolved URL is shown here for convenience.', 'vobj'); ?></p>
+        <?php if (!empty($thumbnail_display) && filter_var($thumbnail_display, FILTER_VALIDATE_URL)): ?>
+          <p style="margin-top:8px;"><img src="<?php echo esc_url($thumbnail_display); ?>" alt="" style="max-width:240px;border:1px solid #ddd;padding:4px;"></p>
+        <?php endif; ?>
+      </td>
+    </tr>
+
+    <tr><th><label><?php _e('Content URL (mp4/HLS) or leave for ACF file mapping', 'vobj'); ?></label></th><td><input type="url" class="widefat" name="vobj_content_url" value="<?php echo $prefill('content_url', ''); ?>"></td></tr>
+    <tr><th><label><?php _e('Embed URL (YouTube/Vimeo)', 'vobj'); ?></label></th><td><input type="url" class="widefat" name="vobj_embed_url" value="<?php echo $prefill('embed_url', ''); ?>"></td></tr>
+    <tr><th><label><?php _e('Transcript (URL or text)', 'vobj'); ?></label></th><td><textarea class="widefat" name="vobj_transcript_url" rows="2"><?php echo $meta_text('transcript_url', ''); ?></textarea></td></tr>
+    <tr><th><label><?php _e('Language', 'vobj'); ?></label></th><td><input type="text" class="regular-text" placeholder="en or en-AU" name="vobj_language" value="<?php echo $prefill('language','en'); ?>"></td></tr>
+    <tr><th><label><?php _e('SeekToAction (auto key moments)', 'vobj'); ?></label></th><td><label><input type="checkbox" name="vobj_seektoaction" value="1" <?php checked(get_post_meta($post->ID, self::META_PREFIX.'seektoaction', true), '1'); ?>> <?php _e('Enable', 'vobj'); ?></label></td></tr>
+
+    <tr>
+      <th><label><?php _e('Clips (JSON)', 'vobj'); ?></label></th>
+      <td>
+        <textarea class="widefat" name="vobj_clips_json" rows="5" placeholder='[{"name":"Intro","startOffset":0,"endOffset":29,"url":""}]'><?php echo esc_textarea(get_post_meta($post->ID, self::META_PREFIX.'clips_json', true)); ?></textarea>
+        <p class="description"><?php _e('Optional chapter markers. Each item: <code>name</code>, <code>startOffset</code> (sec), optional <code>endOffset</code>, optional <code>url</code>.', 'vobj'); ?></p>
+      </td>
+    </tr>
+
+    <!-- Visual description -->
+    <tr>
+      <th><label><?php _e('Visual description', 'vobj'); ?></label></th>
+      <td>
+        <textarea class="widefat" name="vobj_visual_description" rows="4" placeholder="<?php echo esc_attr('Describe visually what happens in this piece (no transcript required).'); ?>"><?php echo esc_textarea(get_post_meta($post->ID, self::META_PREFIX.'visual_description', true)); ?></textarea>
+        <p class="description"><?php _e('Optional: a short/long visual description for work where transcripts are not available. This will be emitted as a PropertyValue "visualDescription" in the schema.', 'vobj'); ?></p>
+      </td>
+    </tr>
+
+  </table>
+
+  <?php
+  // Show Preview (computed payload) for editors
+  if (current_user_can('edit_post', $post->ID)) {
+    echo '<hr>';
+    echo '<details><summary><strong>' . esc_html__('Preview generated JSON-LD', 'vobj') . '</strong></summary><div style="margin-top:8px;">';
+    try {
+      $payload = $this->collect_video_data($post->ID);
+      if ($payload && is_array($payload)) {
+        $pretty = wp_json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        echo '<pre style="white-space:pre-wrap; background:#f6f8fa; padding:10px; border:1px solid #ddd;">' . esc_html($pretty) . '</pre>';
+        $missing = [];
+        if (empty($payload['name'])) $missing[] = 'name';
+        if (empty($payload['thumbnailUrl'])) $missing[] = 'thumbnailUrl';
+        if (empty($payload['uploadDate'])) $missing[] = 'uploadDate';
+        if ($missing) {
+          echo '<p style="color:#b94a48;"><strong>' . esc_html__('Missing required fields: ', 'vobj') . esc_html(implode(', ', $missing)) . '</strong></p>';
+        }
+      } else {
+        echo '<p class="description">' . esc_html__('No schema payload generated for this post. Ensure the post is enabled or ACF mappings / meta values exist.', 'vobj') . '</p>';
+      }
+    } catch (Throwable $e) {
+      echo '<p class="description">' . esc_html__('Preview failed: ') . esc_html($e->getMessage()) . '</p>';
+    }
+    echo '</div></details>';
+  }
+}
 
   public function save_meta($post_id, $post) {
     if (!isset($_POST[self::NONCE]) || !wp_verify_nonce($_POST[self::NONCE], self::NONCE)) return;
