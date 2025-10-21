@@ -633,46 +633,140 @@ class VOBJ_MU_Plugin {
     }
   }
 
-  public function render_meta_box($post) {
-    // If ACF provides fields, many users will ignore this box (that's fine).
-    wp_nonce_field(self::NONCE, self::NONCE);
-    $f = function ($key, $default='') use ($post) {
-      return esc_attr(get_post_meta($post->ID, self::META_PREFIX.$key, true) ?: $default);
-    };
-    ?>
-    <p><label><input type="checkbox" name="vobj_enabled" value="1" <?php checked(get_post_meta($post->ID, self::META_PREFIX.'enabled', true), '1'); ?>> <?php _e('Enable VideoObject on this page', 'vobj'); ?></label></p>
+ public function render_meta_box($post) {
+  // If ACF provides fields, many users will ignore this box (that's fine).
+  wp_nonce_field(self::NONCE, self::NONCE);
 
-    <table class="form-table">
-      <tr><th><label><?php _e('Title', 'vobj'); ?></label></th><td><input type="text" class="widefat" name="vobj_title" value="<?php echo $f('title'); ?>"></td></tr>
-      <tr><th><label><?php _e('Description', 'vobj'); ?></label></th><td><textarea class="widefat" name="vobj_description" rows="3"><?php echo esc_textarea(get_post_meta($post->ID, self::META_PREFIX.'description', true)); ?></textarea></td></tr>
-      <tr><th><label><?php _e('Upload Date (ISO 8601)', 'vobj'); ?></label></th><td><input type="text" class="widefat" placeholder="2025-10-21T09:00:00+11:00" name="vobj_upload_date" value="<?php echo $f('upload_date'); ?>"></td></tr>
-      <tr><th><label><?php _e('Duration (ISO 8601)', 'vobj'); ?></label></th><td><input type="text" class="widefat" placeholder="PT2M31S" name="vobj_duration_iso" value="<?php echo $f('duration_iso'); ?>"></td></tr>
-      <tr><th><label><?php _e('Thumbnail URL', 'vobj'); ?></label></th><td><input type="url" class="widefat" name="vobj_thumbnail_url" value="<?php echo $f('thumbnail_url'); ?>"></td></tr>
-      <tr><th><label><?php _e('Content URL (mp4/HLS)', 'vobj'); ?></label></th><td><input type="url" class="widefat" name="vobj_content_url" value="<?php echo $f('content_url'); ?>"></td></tr>
-      <tr><th><label><?php _e('Embed URL (YouTube/Vimeo)', 'vobj'); ?></label></th><td><input type="url" class="widefat" name="vobj_embed_url" value="<?php echo $f('embed_url'); ?>"></td></tr>
-      <tr><th><label><?php _e('Transcript (URL or text)', 'vobj'); ?></label></th><td><textarea class="widefat" name="vobj_transcript_url" rows="2"><?php echo esc_textarea(get_post_meta($post->ID, self::META_PREFIX.'transcript_url', true)); ?></textarea></td></tr>
-      <tr><th><label><?php _e('Language', 'vobj'); ?></label></th><td><input type="text" class="regular-text" placeholder="en or en-AU" name="vobj_language" value="<?php echo $f('language','en'); ?>"></td></tr>
-      <tr><th><label><?php _e('SeekToAction (auto key moments)', 'vobj'); ?></label></th><td><label><input type="checkbox" name="vobj_seektoaction" value="1" <?php checked(get_post_meta($post->ID, self::META_PREFIX.'seektoaction', true), '1'); ?>> <?php _e('Enable', 'vobj'); ?></label></td></tr>
-      <tr>
-        <th><label><?php _e('Clips (JSON)', 'vobj'); ?></label></th>
-        <td>
-          <textarea class="widefat" name="vobj_clips_json" rows="5" placeholder='[{"name":"Intro","startOffset":0,"endOffset":29,"url":""},{"name":"Design breakdown","startOffset":30}]'><?php echo esc_textarea(get_post_meta($post->ID, self::META_PREFIX.'clips_json', true)); ?></textarea>
-          <p class="description"><?php _e('Optional chapter markers. Each item: <code>name</code>, <code>startOffset</code> (sec), optional <code>endOffset</code>, optional <code>url</code>.', 'vobj'); ?></p>
-        </td>
-      </tr>
+  // Helper that prefers (1) post meta, (2) mapped ACF value, (3) provided default.
+  $prefill = function ($key, $default = '') use ($post) {
+    // 1) saved per-post meta (explicitly stored by this meta box)
+    $meta = get_post_meta($post->ID, self::META_PREFIX.$key, true);
+    if ($meta !== '') {
+      return esc_attr($meta);
+    }
 
-      <!-- New: Visual description -->
-      <tr>
-        <th><label><?php _e('Visual description', 'vobj'); ?></label></th>
-        <td>
-          <textarea class="widefat" name="vobj_visual_description" rows="4" placeholder="<?php echo esc_attr('Describe visually what happens in this piece (no transcript required).'); ?>"><?php echo esc_textarea(get_post_meta($post->ID, self::META_PREFIX.'visual_description', true)); ?></textarea>
-          <p class="description"><?php _e('Optional: a short/long visual description for work where transcripts are not available. This will be emitted as a PropertyValue "visualDescription" in the schema.', 'vobj'); ?></p>
-        </td>
-      </tr>
+    // 2) mapped ACF value (if configured)
+    // get_mapped_acf returns null when no mapping/empty. Convert arrays to '' for form fields.
+    $mapped = null;
+    if (method_exists($this, 'get_mapped_acf')) {
+      try {
+        $mapped = $this->get_mapped_acf($post->ID, $key);
+      } catch (Throwable $e) {
+        $mapped = null;
+      }
+    }
+    if ($mapped !== null) {
+      if (is_array($mapped)) {
+        // Avoid dumping arrays into text fields; return empty so author can override.
+        return esc_attr($default);
+      }
+      return esc_attr((string)$mapped);
+    }
 
-    </table>
-    <?php
+    // 3) last-resort defaults (post title/excerpt/etc.)
+    if ($key === 'title') {
+      return esc_attr(get_the_title($post->ID) ?: $default);
+    }
+    if ($key === 'description') {
+      return esc_attr(wp_strip_all_tags(get_the_excerpt($post->ID)) ?: $default);
+    }
+
+    return esc_attr($default);
+  };
+
+  // Small wrapper to get saved raw meta for textarea display (sanitized on save)
+  $meta_text = function($key, $default='') use ($post) {
+    $v = get_post_meta($post->ID, self::META_PREFIX.$key, true);
+    if ($v !== '') return esc_textarea($v);
+    // try mapped ACF for multiline fields like visual_description or transcript
+    if (method_exists($this, 'get_mapped_acf')) {
+      $m = $this->get_mapped_acf($post->ID, $key);
+      if (is_string($m) && $m !== '') return esc_textarea($m);
+    }
+    return esc_textarea($default);
+  };
+
+  ?>
+  <p><label><input type="checkbox" name="vobj_enabled" value="1" <?php checked(get_post_meta($post->ID, self::META_PREFIX.'enabled', true), '1'); ?>> <?php _e('Enable VideoObject on this page', 'vobj'); ?></label></p>
+
+  <table class="form-table">
+    <tr><th><label><?php _e('Title', 'vobj'); ?></label></th>
+        <td><input type="text" class="widefat" name="vobj_title" value="<?php echo $prefill('title', get_the_title($post->ID)); ?>"></td></tr>
+
+    <tr><th><label><?php _e('Description', 'vobj'); ?></label></th>
+        <td><textarea class="widefat" name="vobj_description" rows="3"><?php echo $meta_text('description', wp_strip_all_tags(get_the_excerpt($post->ID))); ?></textarea></td></tr>
+
+    <tr><th><label><?php _e('Upload Date (ISO 8601)', 'vobj'); ?></label></th>
+        <td><input type="text" class="widefat" placeholder="2025-10-21T09:00:00+11:00" name="vobj_upload_date" value="<?php echo $prefill('upload_date', get_post_time('c', true, $post->ID)); ?>"></td></tr>
+
+    <tr><th><label><?php _e('Duration (ISO 8601)', 'vobj'); ?></label></th>
+        <td><input type="text" class="widefat" placeholder="PT2M31S" name="vobj_duration_iso" value="<?php echo $prefill('duration_iso', ''); ?>"></td></tr>
+
+    <tr><th><label><?php _e('Thumbnail URL', 'vobj'); ?></label></th>
+        <td><input type="url" class="widefat" name="vobj_thumbnail_url" value="<?php echo $prefill('thumbnail_url', ''); ?>"></td></tr>
+
+    <tr><th><label><?php _e('Content URL (mp4/HLS)', 'vobj'); ?></label></th>
+        <td><input type="url" class="widefat" name="vobj_content_url" value="<?php echo $prefill('content_url', ''); ?>"></td></tr>
+
+    <tr><th><label><?php _e('Embed URL (YouTube/Vimeo)', 'vobj'); ?></label></th>
+        <td><input type="url" class="widefat" name="vobj_embed_url" value="<?php echo $prefill('embed_url', ''); ?>"></td></tr>
+
+    <tr><th><label><?php _e('Transcript (URL or text)', 'vobj'); ?></label></th>
+        <td><textarea class="widefat" name="vobj_transcript_url" rows="2"><?php echo $meta_text('transcript_url', ''); ?></textarea></td></tr>
+
+    <tr><th><label><?php _e('Language', 'vobj'); ?></label></th>
+        <td><input type="text" class="regular-text" placeholder="en or en-AU" name="vobj_language" value="<?php echo $prefill('language','en'); ?>"></td></tr>
+
+    <tr><th><label><?php _e('SeekToAction (auto key moments)', 'vobj'); ?></label></th>
+        <td><label><input type="checkbox" name="vobj_seektoaction" value="1" <?php checked(get_post_meta($post->ID, self::META_PREFIX.'seektoaction', true), '1'); ?>> <?php _e('Enable', 'vobj'); ?></label></td></tr>
+
+    <tr>
+      <th><label><?php _e('Clips (JSON)', 'vobj'); ?></label></th>
+      <td>
+        <textarea class="widefat" name="vobj_clips_json" rows="5" placeholder='[{"name":"Intro","startOffset":0,"endOffset":29,"url":""},{"name":"Design breakdown","startOffset":30}]'><?php echo esc_textarea(get_post_meta($post->ID, self::META_PREFIX.'clips_json', true)); ?></textarea>
+        <p class="description"><?php _e('Optional chapter markers. Each item: <code>name</code>, <code>startOffset</code> (sec), optional <code>endOffset</code>, optional <code>url</code>.', 'vobj'); ?></p>
+      </td>
+    </tr>
+
+    <!-- Visual description -->
+    <tr>
+      <th><label><?php _e('Visual description', 'vobj'); ?></label></th>
+      <td>
+        <textarea class="widefat" name="vobj_visual_description" rows="4" placeholder="<?php echo esc_attr('Describe visually what happens in this piece (no transcript required).'); ?>"><?php echo $meta_text('visual_description', ''); ?></textarea>
+        <p class="description"><?php _e('Optional: a short/long visual description for work where transcripts are not available. This will be emitted as a PropertyValue "visualDescription" in the schema.', 'vobj'); ?></p>
+      </td>
+    </tr>
+  </table>
+
+  <?php
+  // Preview: show computed JSON-LD payload for this post so editor can see what's generated.
+  if (current_user_can('edit_post', $post->ID)) {
+    echo '<hr>';
+    echo '<details><summary><strong>' . esc_html__('Preview generated JSON-LD', 'vobj') . '</strong></summary><div style="margin-top:8px;">';
+    // Use plugin's collector to build the actual payload for preview.
+    try {
+      $payload = $this->collect_video_data($post->ID);
+      if ($payload && is_array($payload)) {
+        // Pretty print for readability
+        $pretty = wp_json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        echo '<pre style="white-space:pre-wrap; background:#f6f8fa; padding:10px; border:1px solid #ddd;">' . esc_html($pretty) . '</pre>';
+        // Quick check for missing minimum required fields
+        $missing = [];
+        if (empty($payload['name'])) $missing[] = 'name';
+        if (empty($payload['thumbnailUrl'])) $missing[] = 'thumbnailUrl';
+        if (empty($payload['uploadDate'])) $missing[] = 'uploadDate';
+        if ($missing) {
+          echo '<p style="color:#b94a48;"><strong>' . esc_html__('Missing required fields: ', 'vobj') . esc_html(implode(', ', $missing)) . '</strong></p>';
+        }
+      } else {
+        echo '<p class="description">' . esc_html__('No schema payload generated for this post. Ensure the post is enabled or ACF mappings / meta values exist.', 'vobj') . '</p>';
+      }
+    } catch (Throwable $e) {
+      echo '<p class="description">' . esc_html__('Preview failed: ') . esc_html($e->getMessage()) . '</p>';
+    }
+    echo '</div></details>';
   }
+}
 
   public function save_meta($post_id, $post) {
     if (!isset($_POST[self::NONCE]) || !wp_verify_nonce($_POST[self::NONCE], self::NONCE)) return;
