@@ -1,4 +1,4 @@
-# Antibody VideoObject Schema (MU)
+# Alphabeta VideoObject Schema (MU)
 
 Small MU-plugin that outputs Schema.org VideoObject JSON-LD for singular posts/pages. Designed to be theme-agnostic and to integrate with ACF when present.
 
